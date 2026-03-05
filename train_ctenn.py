@@ -13,7 +13,7 @@ from sklearn.metrics import (
 )
 from config import *
 from data.dataset import MurmurDataset
-from models.murmur_model import MurmurModel
+from models.ctenn_model import CTENN_Murmur
 from losses.focal_loss import FocalLoss
 from metrics import validate_murmur_model
 from pathlib import Path
@@ -96,6 +96,7 @@ print(f"Train samples: {len(train_ds)}")
 print(f"Val samples:   {len(val_ds)}")
 print(f"Test samples:  {len(test_ds)}")
 
+
 def evaluate_model(model, loader, device, use_fp16=False):
     model.eval()
     y_true, y_prob = [], []
@@ -126,7 +127,6 @@ def evaluate_model(model, loader, device, use_fp16=False):
     }
 
     return results
-
 
 # ---------------------------------------------------
 # Training Function (UNCHANGED)
@@ -187,7 +187,7 @@ def train_murmur_model(model, train_loader, val_loader, epochs):
             wait = 0
             torch.save(
                 model.state_dict(),
-                r"/home/hariramanan/Project/madhan/hs_model/hs_murmur_wb_sw_bilstm_tp_gate_model.pt"
+                r"/home/hariramanan/Project/madhan/hs_model/hs_murmur_ctenn_new_gate_model.pt"
             )
             print("Best model saved")
         else:
@@ -200,13 +200,14 @@ def train_murmur_model(model, train_loader, val_loader, epochs):
 # ---------------------------------------------------
 # Run Training
 # ---------------------------------------------------
-model = MurmurModel().to(DEVICE)
+model = CTENN_Murmur().to(DEVICE)
 train_murmur_model(model, train_dl, val_dl, epochs=20)
+
 results = evaluate_model(model, test_dl, DEVICE, use_fp16=False)
 # ---------------------------------------------------
 # Generate Evaluation Report
 # ---------------------------------------------------
-report_path = "/home/hariramanan/Project/madhan/hs_model/evaluation_report_whisper.txt"
+report_path = "/home/hariramanan/Project/madhan/hs_model/evaluation_report_sw.txt"
 
 with open(report_path, "w") as f:
 
@@ -223,4 +224,3 @@ with open(report_path, "w") as f:
     f.write(f"F1 Score: {results['f1_score']:.4f}\n\n")
     f.write(results["classification_report"])
     f.write("\n\n")
-print(f"Evaluation report saved at:\n{report_path}")    

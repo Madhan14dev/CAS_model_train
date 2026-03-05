@@ -1,8 +1,12 @@
+# models/murmur_model.py
+
 import torch
 import torch.nn as nn
 import torchaudio
-from transformers import WhisperModel
-from config import *
+
+from config import SAMPLE_RATE
+from .quartznet_encoder import QuartzNetEncoder
+
 
 class MurmurModel(nn.Module):
     def __init__(self):
@@ -17,30 +21,25 @@ class MurmurModel(nn.Module):
             f_max=800
         )
 
-        self.encoder = WhisperModel.from_pretrained(
-            "openai/whisper-tiny"
-        ).encoder
+        # QuartzNet Encoder
+        self.encoder = QuartzNetEncoder(repeat=2)
 
-        for p in self.encoder.parameters():
-            p.requires_grad = False
-        self.encoder.eval()
-
-        hidden = self.encoder.config.hidden_size
+        hidden = 1024
 
         self.bilstm = nn.LSTM(
             input_size=hidden,
             hidden_size=hidden // 2,
             num_layers=1,
             batch_first=True,
-            bidirectional=True,
-            dropout=0.0
+            bidirectional=True
         )
+
         self.post_lstm_norm = nn.LayerNorm(hidden)
 
         self.temporal = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=hidden,
-                nhead=4,
+                nhead=8,
                 dim_feedforward=hidden * 2,
                 batch_first=True,
                 activation="gelu",
@@ -63,40 +62,20 @@ class MurmurModel(nn.Module):
 
     def forward(self, wav):
 
-        mel_lin = self.mel(wav.float())
-        frame_mask = (mel_lin.sum(dim=1) > 0)
-        mel = torch.log(mel_lin + 1e-6)
-        mel = mel.to(self.encoder.conv1.weight.dtype)
-        MAX_FRAMES = 3000
-        T = mel.shape[-1]
+        mel = self.mel(wav.float())
+        mel = torch.log(mel + 1e-6)
 
-        if T > MAX_FRAMES:
-            mel = mel[..., :MAX_FRAMES]
-            frame_mask = frame_mask[:, :MAX_FRAMES]
-        else:
-            pad_len = MAX_FRAMES - T
-            mel = torch.nn.functional.pad(mel, (0, pad_len))
-            frame_mask = torch.nn.functional.pad(
-                frame_mask, (0, pad_len), value=False
-            )
-
-        feats = self.encoder(input_features=mel).last_hidden_state
-        frame_mask = frame_mask[:, ::2][:, :feats.shape[1]]
+        # QuartzNet expects (B, n_mels, T)
+        feats = self.encoder(mel)
 
         feats, _ = self.bilstm(feats)
         feats = self.post_lstm_norm(feats)
 
-        feats = self.temporal(
-            feats,
-            src_key_padding_mask=~frame_mask
-        )
+        feats = self.temporal(feats)
 
         A_V = torch.tanh(self.attn_V(feats))
         A_U = torch.sigmoid(self.attn_U(feats))
         A = self.attn_w(A_V * A_U)
-
-        mask_value = torch.finfo(A.dtype).min
-        A = A.masked_fill(~frame_mask.unsqueeze(-1), mask_value)
 
         weights = torch.softmax(A, dim=1)
         pooled = (weights * feats).sum(dim=1)
